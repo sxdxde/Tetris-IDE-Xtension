@@ -1,0 +1,50 @@
+{
+  "name": "tetris",
+  "displayName": "Tetris",
+  "description": "Highlights all function declarations and calls in a single color so your code looks like Tetris blocks",
+  "version": "0.1.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["highlight", "functions", "color", "tetris"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension",
+  "contributes": {
+    "configuration": {
+      "title": "Tetris",
+      "properties": {
+        "tetris.highlightColor": {
+          "type": "string",
+          "default": "#00FFCC",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "patternErrorMessage": "Must be a 6-digit hex color (e.g. #00FFCC)",
+          "description": "Hex color for function declaration and call highlights."
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "tetris.functionHighlight",
+        "description": "Color used to highlight function declarations and calls",
+        "defaults": {
+          "dark": "#00FFCC",
+          "light": "#007A60",
+          "highContrast": "#00FFCC",
+          "highContrastLight": "#007A60"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.70.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
