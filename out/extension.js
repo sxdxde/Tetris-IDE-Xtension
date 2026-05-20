@@ -7,6 +7,7 @@ const vscode = require("vscode");
 const SUPPORTED = new Set([
     'javascript', 'typescript', 'javascriptreact', 'typescriptreact',
     'python', 'java', 'c', 'cpp', 'go',
+    'csharp', 'rust', 'php', 'swift', 'kotlin', 'ruby',
 ]);
 // ─── Keyword blocklists ───────────────────────────────────────────────────────
 const JS_KW = new Set(['if', 'else', 'for', 'while', 'do', 'switch', 'try', 'catch', 'finally', 'return', 'new', 'delete', 'typeof', 'instanceof', 'in', 'of', 'class', 'extends', 'import', 'export', 'from', 'default', 'async', 'await', 'yield', 'function', 'var', 'let', 'const', 'this', 'super', 'null', 'undefined', 'true', 'false', 'void', 'throw', 'case', 'break', 'continue', 'debugger', 'static', 'public', 'private', 'protected', 'get', 'set', 'abstract', 'override', 'readonly', 'interface', 'type', 'enum', 'namespace', 'module', 'declare', 'as', 'is', 'satisfies']);
@@ -14,6 +15,12 @@ const PY_KW = new Set(['if', 'elif', 'else', 'for', 'while', 'with', 'try', 'exc
 const GO_KW = new Set(['if', 'else', 'for', 'switch', 'select', 'return', 'go', 'defer', 'fallthrough', 'break', 'continue', 'goto', 'var', 'const', 'type', 'struct', 'interface', 'map', 'chan', 'range', 'import', 'package', 'func', 'make', 'new', 'len', 'cap', 'append', 'copy', 'delete', 'close', 'panic', 'recover', 'print', 'println']);
 const C_KW = new Set(['if', 'else', 'for', 'while', 'do', 'switch', 'return', 'break', 'continue', 'goto', 'sizeof', 'struct', 'union', 'enum', 'typedef', 'extern', 'static', 'void', 'int', 'float', 'double', 'char', 'long', 'short', 'unsigned', 'signed', 'const', 'volatile', 'register', 'auto', 'inline', 'restrict', 'true', 'false', 'NULL', 'null']);
 const JAVA_KW = new Set(['if', 'else', 'for', 'while', 'do', 'switch', 'return', 'break', 'continue', 'new', 'class', 'interface', 'extends', 'implements', 'super', 'this', 'null', 'true', 'false', 'void', 'int', 'float', 'double', 'char', 'boolean', 'long', 'short', 'byte', 'final', 'static', 'abstract', 'synchronized', 'native', 'transient', 'volatile', 'public', 'private', 'protected', 'throw', 'throws', 'try', 'catch', 'finally', 'import', 'package', 'instanceof', 'enum', 'assert', 'default', 'goto', 'strictfp']);
+const CSHARP_KW = new Set(['if', 'else', 'for', 'foreach', 'while', 'do', 'switch', 'return', 'break', 'continue', 'new', 'class', 'interface', 'struct', 'enum', 'namespace', 'using', 'public', 'private', 'protected', 'internal', 'static', 'abstract', 'virtual', 'override', 'sealed', 'readonly', 'const', 'void', 'int', 'long', 'short', 'byte', 'float', 'double', 'decimal', 'char', 'bool', 'string', 'object', 'var', 'null', 'true', 'false', 'this', 'base', 'throw', 'try', 'catch', 'finally', 'delegate', 'event', 'out', 'ref', 'in', 'params', 'async', 'await', 'yield', 'is', 'as', 'typeof', 'sizeof', 'checked', 'unchecked', 'lock', 'goto', 'default', 'case', 'where', 'record', 'init', 'with', 'required', 'file', 'scoped']);
+const RUST_KW = new Set(['if', 'else', 'for', 'while', 'loop', 'match', 'return', 'break', 'continue', 'fn', 'let', 'mut', 'const', 'struct', 'enum', 'impl', 'trait', 'pub', 'use', 'mod', 'crate', 'super', 'self', 'Self', 'move', 'async', 'await', 'where', 'type', 'static', 'extern', 'unsafe', 'in', 'ref', 'true', 'false', 'None', 'Some', 'Ok', 'Err', 'dyn', 'box', 'as', 'macro_rules']);
+const PHP_KW = new Set(['if', 'else', 'elseif', 'while', 'for', 'foreach', 'do', 'switch', 'return', 'break', 'continue', 'function', 'class', 'interface', 'extends', 'implements', 'new', 'echo', 'print', 'include', 'require', 'use', 'namespace', 'public', 'private', 'protected', 'static', 'abstract', 'final', 'null', 'true', 'false', 'NULL', 'TRUE', 'FALSE', '$this', 'self', 'parent', 'yield', 'throw', 'try', 'catch', 'finally', 'match', 'fn', 'readonly', 'enum']);
+const SWIFT_KW = new Set(['if', 'else', 'guard', 'for', 'while', 'repeat', 'switch', 'return', 'break', 'continue', 'fallthrough', 'defer', 'throw', 'func', 'var', 'let', 'class', 'struct', 'enum', 'protocol', 'extension', 'import', 'public', 'private', 'internal', 'fileprivate', 'open', 'static', 'final', 'override', 'init', 'deinit', 'super', 'self', 'true', 'false', 'nil', 'in', 'is', 'as', 'try', 'catch', 'throws', 'rethrows', 'async', 'await', 'some', 'any', 'where', 'case', 'default', 'typealias', 'associatedtype', 'willSet', 'didSet', 'get', 'set', 'actor', 'isolated', 'nonisolated', 'consuming', 'borrowing']);
+const KOTLIN_KW = new Set(['if', 'else', 'for', 'while', 'do', 'when', 'return', 'break', 'continue', 'fun', 'val', 'var', 'class', 'interface', 'object', 'companion', 'init', 'constructor', 'super', 'this', 'null', 'true', 'false', 'in', 'is', 'as', 'try', 'catch', 'throw', 'finally', 'import', 'package', 'public', 'private', 'protected', 'internal', 'abstract', 'open', 'final', 'override', 'data', 'sealed', 'enum', 'annotation', 'by', 'where', 'out', 'crossinline', 'noinline', 'reified', 'suspend', 'inline', 'typealias', 'it', 'lateinit', 'const', 'object', 'tailrec', 'operator', 'infix', 'external', 'actual', 'expect']);
+const RUBY_KW = new Set(['if', 'elsif', 'else', 'unless', 'while', 'until', 'for', 'do', 'case', 'when', 'then', 'begin', 'rescue', 'ensure', 'retry', 'return', 'yield', 'raise', 'fail', 'next', 'break', 'def', 'end', 'class', 'module', 'in', 'and', 'or', 'not', 'true', 'false', 'nil', 'self', 'super', '__FILE__', '__LINE__', '__method__', 'lambda', 'proc', 'puts', 'print', 'p', 'require', 'require_relative', 'include', 'extend', 'attr_accessor', 'attr_reader', 'attr_writer']);
 function kwFor(lang) {
     if (lang === 'python')
         return PY_KW;
@@ -23,6 +30,18 @@ function kwFor(lang) {
         return C_KW;
     if (lang === 'java')
         return JAVA_KW;
+    if (lang === 'csharp')
+        return CSHARP_KW;
+    if (lang === 'rust')
+        return RUST_KW;
+    if (lang === 'php')
+        return PHP_KW;
+    if (lang === 'swift')
+        return SWIFT_KW;
+    if (lang === 'kotlin')
+        return KOTLIN_KW;
+    if (lang === 'ruby')
+        return RUBY_KW;
     return JS_KW;
 }
 // ─── Color generation ─────────────────────────────────────────────────────────
@@ -187,11 +206,210 @@ function pyBodyEnd(text, colonAt) {
     }
     return last;
 }
+// For Ruby: finds position after the `end` that closes the `def` starting at `from`.
+// Counts def/class/module/begin/case/if/unless/while/until/for/do as openers.
+// Skips strings and line comments.
+function rubyBodyEnd(text, from) {
+    let i = from, depth = 1;
+    while (i < text.length && depth > 0) {
+        // Line comment
+        if (text[i] === '#') {
+            while (i < text.length && text[i] !== '\n')
+                i++;
+            continue;
+        }
+        // Single-quoted string
+        if (text[i] === "'") {
+            i++;
+            while (i < text.length && text[i] !== "'") {
+                if (text[i] === '\\')
+                    i++;
+                i++;
+            }
+            i++;
+            continue;
+        }
+        // Double-quoted string (skip interpolation for simplicity)
+        if (text[i] === '"') {
+            i++;
+            while (i < text.length && text[i] !== '"') {
+                if (text[i] === '\\')
+                    i++;
+                i++;
+            }
+            i++;
+            continue;
+        }
+        // Word boundary — check for keywords
+        if (/[a-zA-Z_]/.test(text[i])) {
+            let j = i;
+            while (j < text.length && /\w/.test(text[j]))
+                j++;
+            const prev = i > 0 ? text[i - 1] : ' ';
+            const word = text.slice(i, j);
+            // Only count as a keyword if not preceded by a word character (e.g. not inside `end_pos`)
+            if (!/\w/.test(prev)) {
+                if (word === 'end') {
+                    depth--;
+                    if (depth === 0) {
+                        i = j;
+                        break;
+                    }
+                    i = j;
+                    continue;
+                }
+                // Block openers that always need an `end`
+                if (['def', 'class', 'module', 'begin', 'case'].includes(word)) {
+                    depth++;
+                    i = j;
+                    continue;
+                }
+                // Conditional/loop openers — only when at line start (not postfix modifiers)
+                if (['if', 'unless', 'while', 'until', 'for'].includes(word)) {
+                    let ls = i - 1;
+                    while (ls >= 0 && text[ls] !== '\n') {
+                        if (text[ls] !== ' ' && text[ls] !== '\t') {
+                            ls = -1;
+                            break;
+                        }
+                        ls--;
+                    }
+                    if (ls >= 0 || i === 0) {
+                        depth++;
+                    }
+                    i = j;
+                    continue;
+                }
+                // `do` used as a block opener (e.g. `each do |x|`)
+                if (word === 'do') {
+                    depth++;
+                    i = j;
+                    continue;
+                }
+            }
+            i = j;
+            continue;
+        }
+        i++;
+    }
+    return i;
+}
+// ─── Shared brace-based extractor helper ─────────────────────────────────────
+function braceExtract(text, re, nameGroup, wsGroup, kw) {
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        const name = m[nameGroup];
+        if (!name || kw.has(name))
+            continue;
+        const sigS = m.index + (wsGroup >= 0 ? m[wsGroup].length : 0);
+        const sigE = m.index + m[0].length;
+        const ob = nextBrace(text, sigE);
+        const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
+        out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+    }
+    return out;
+}
 // ─── Language-specific extraction ─────────────────────────────────────────────
 function extractFuncs(text, lang) {
     const kw = kwFor(lang);
     const out = [];
     let m;
+    // ── C# ───────────────────────────────────────────────────────────────────────
+    if (lang === 'csharp') {
+        // [modifiers] ReturnType Name<T>(params) [where T : ...] { ... }
+        const re = /^(\s*)((?:(?:public|private|protected|internal|static|abstract|virtual|override|sealed|async|new|extern|partial|readonly|unsafe|explicit|implicit)\s+)*)(?:[\w<>\[\],?.* ]+\s+)(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+where\s+[^{]+)?(?=\s*[{;])/gm;
+        return braceExtract(text, re, 3, 1, kw);
+    }
+    // ── Rust ─────────────────────────────────────────────────────────────────────
+    if (lang === 'rust') {
+        // [pub[(crate)]] [async] [unsafe] fn name<T>(params) [-> ReturnType] [where ...]
+        const re = /\b((?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+)(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
+        while ((m = re.exec(text)) !== null) {
+            const name = m[2];
+            if (kw.has(name))
+                continue;
+            const sigS = m.index, sigE = m.index + m[0].length;
+            const ob = nextBrace(text, sigE);
+            const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
+            out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+        }
+        return out;
+    }
+    // ── PHP ──────────────────────────────────────────────────────────────────────
+    if (lang === 'php') {
+        // [modifiers] function name(params) [: ReturnType] { ... }
+        const re = /\b((?:(?:public|private|protected|static|abstract|final)\s+)*)function\s+(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s*:\s*[\w\\|?! ]+)?/g;
+        while ((m = re.exec(text)) !== null) {
+            const name = m[2];
+            if (kw.has(name))
+                continue;
+            const sigS = m.index, sigE = m.index + m[0].length;
+            const ob = nextBrace(text, sigE);
+            const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
+            out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+        }
+        return out;
+    }
+    // ── Swift ────────────────────────────────────────────────────────────────────
+    if (lang === 'swift') {
+        // [modifiers] func name<T>(params) [async] [throws] [-> ReturnType] { ... }
+        const re = /\b((?:(?:private|public|internal|fileprivate|open|static|class|override|mutating|nonmutating|final|required|convenience|dynamic|lazy|optional|nonisolated|isolated)\s+)*)func\s+(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
+        while ((m = re.exec(text)) !== null) {
+            const name = m[2];
+            if (kw.has(name))
+                continue;
+            const sigS = m.index, sigE = m.index + m[0].length;
+            const ob = nextBrace(text, sigE);
+            const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
+            out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+        }
+        return out;
+    }
+    // ── Kotlin ───────────────────────────────────────────────────────────────────
+    if (lang === 'kotlin') {
+        // [modifiers] fun name<T>(params) [: ReturnType] { ... }  OR  = expression
+        const re = /\b((?:(?:private|public|internal|protected|override|abstract|open|final|suspend|inline|infix|operator|external|tailrec|actual|expect)\s+)*)fun\s+(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
+        while ((m = re.exec(text)) !== null) {
+            const name = m[2];
+            if (kw.has(name))
+                continue;
+            const sigS = m.index, sigE = m.index + m[0].length;
+            // Scan past optional `: ReturnType` to find `{` or `=`
+            let k = sigE;
+            while (k < text.length && text[k] !== '{' && text[k] !== '=' && text[k] !== '\n')
+                k++;
+            let bE;
+            if (k < text.length && text[k] === '{') {
+                bE = braceEnd(text, k) ?? sigE;
+            }
+            else if (k < text.length && text[k] === '=') {
+                let end = k + 1;
+                while (end < text.length && text[end] !== '\n')
+                    end++;
+                bE = end;
+            }
+            else {
+                bE = sigE;
+            }
+            out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+        }
+        return out;
+    }
+    // ── Ruby ─────────────────────────────────────────────────────────────────────
+    if (lang === 'ruby') {
+        // def [self.]name[(params)]  …  end
+        const re = /\b(def\s+(?:self\.)?(\w+)(?:\s*\([^)]*\))?)/g;
+        while ((m = re.exec(text)) !== null) {
+            const name = m[2];
+            if (kw.has(name))
+                continue;
+            const sigS = m.index, sigE = m.index + m[0].length;
+            const bE = rubyBodyEnd(text, sigE);
+            out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
+        }
+        return out;
+    }
     // ── Python ──────────────────────────────────────────────────────────────────
     if (lang === 'python') {
         const re = /\b((?:async\s+)?def\s+(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)(?:\s*->[^:]+)?)\s*(:)/g;
