@@ -1,10 +1,63 @@
 import * as vscode from 'vscode';
 
 // ---------------------------------------------------------------------------
-// Language keyword sets — names matching these are never highlighted
+// Supported languages
 // ---------------------------------------------------------------------------
 
-const JS_KEYWORDS = new Set([
+const SUPPORTED_LANGUAGES = new Set([
+  'javascript','typescript','javascriptreact','typescriptreact',
+  'python','java','c','cpp','go',
+]);
+
+// ---------------------------------------------------------------------------
+// Tetris palette — one color per piece type, assigned by function name hash
+// ---------------------------------------------------------------------------
+
+const PALETTE = [
+  '#00FFFF', // I — cyan
+  '#FFD700', // O — gold
+  '#CC44FF', // T — purple
+  '#00EE44', // S — green
+  '#FF4444', // Z — red
+  '#4488FF', // J — blue
+  '#FF8800', // L — orange
+];
+
+function nameToColorIdx(name: string): number {
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) {
+    h = ((h << 5) + h + name.charCodeAt(i)) >>> 0;
+  }
+  return h % PALETTE.length;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${alpha})`;
+}
+
+// ---------------------------------------------------------------------------
+// Decoration types — one per palette entry, recreated on demand
+// ---------------------------------------------------------------------------
+
+let decorationTypes: vscode.TextEditorDecorationType[] = [];
+
+function makeDecorationTypes(): vscode.TextEditorDecorationType[] {
+  return PALETTE.map(color =>
+    vscode.window.createTextEditorDecorationType({
+      color,
+      backgroundColor: hexToRgba(color, 0.13),
+      fontWeight: '600',
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    })
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Keyword block-lists
+// ---------------------------------------------------------------------------
+
+const JS_KW = new Set([
   'if','else','for','while','do','switch','try','catch','finally','return',
   'new','delete','typeof','instanceof','in','of','class','extends','import',
   'export','from','default','async','await','yield','function','var','let',
@@ -14,268 +67,219 @@ const JS_KEYWORDS = new Set([
   'namespace','module','declare','as','is','satisfies',
 ]);
 
-const PYTHON_KEYWORDS = new Set([
+const PY_KW = new Set([
   'if','elif','else','for','while','with','try','except','finally','return',
   'yield','raise','pass','break','continue','import','from','as','class',
   'lambda','and','or','not','in','is','None','True','False','global',
   'nonlocal','del','assert','print',
 ]);
 
-const GO_KEYWORDS = new Set([
+const GO_KW = new Set([
   'if','else','for','switch','select','return','go','defer','fallthrough',
   'break','continue','goto','var','const','type','struct','interface','map',
   'chan','range','import','package','func','make','new','len','cap','append',
   'copy','delete','close','panic','recover','print','println',
 ]);
 
-const C_KEYWORDS = new Set([
+const C_KW = new Set([
   'if','else','for','while','do','switch','return','break','continue','goto',
   'sizeof','struct','union','enum','typedef','extern','static','void','int',
   'float','double','char','long','short','unsigned','signed','const','volatile',
   'register','auto','inline','restrict','true','false','NULL','null',
 ]);
 
-const JAVA_KEYWORDS = new Set([
+const JAVA_KW = new Set([
   'if','else','for','while','do','switch','return','break','continue','new',
   'class','interface','extends','implements','super','this','null','true',
   'false','void','int','float','double','char','boolean','long','short','byte',
   'final','static','abstract','synchronized','native','transient','volatile',
-  'strictfp','public','private','protected','throw','throws','try','catch',
-  'finally','import','package','instanceof','enum','assert','default','goto',
+  'public','private','protected','throw','throws','try','catch','finally',
+  'import','package','instanceof','enum','assert','default','goto','strictfp',
 ]);
 
-function getKeywords(lang: string): Set<string> {
-  if (lang === 'python') return PYTHON_KEYWORDS;
-  if (lang === 'go') return GO_KEYWORDS;
-  if (lang === 'c' || lang === 'cpp') return C_KEYWORDS;
-  if (lang === 'java') return JAVA_KEYWORDS;
-  return JS_KEYWORDS;
-}
-
-const SUPPORTED_LANGUAGES = new Set([
-  'javascript','typescript','javascriptreact','typescriptreact',
-  'python','java','c','cpp','go',
-]);
-
-// ---------------------------------------------------------------------------
-// Decoration state
-// ---------------------------------------------------------------------------
-
-let activeDecorationType: vscode.TextEditorDecorationType | undefined;
-const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
-
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function getConfigColor(): string {
-  return vscode.workspace.getConfiguration('tetris').get<string>('highlightColor', '#00FFCC');
-}
-
-function makeDecorationType(color: string): vscode.TextEditorDecorationType {
-  return vscode.window.createTextEditorDecorationType({
-    color,
-    backgroundColor: hexToRgba(color, 0.12),
-    fontWeight: '600',
-    rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-  });
+function kw(lang: string): Set<string> {
+  if (lang === 'python') return PY_KW;
+  if (lang === 'go') return GO_KW;
+  if (lang === 'c' || lang === 'cpp') return C_KW;
+  if (lang === 'java') return JAVA_KW;
+  return JS_KW;
 }
 
 // ---------------------------------------------------------------------------
-// Range helpers
+// Offset-range helpers
 // ---------------------------------------------------------------------------
 
-interface OffsetRange {
-  start: number;
-  end: number;
+interface OR { start: number; end: number; }
+
+function add(map: Map<string, OR[]>, name: string, s: number, e: number): void {
+  if (s >= e) return;
+  const arr = map.get(name) ?? [];
+  arr.push({ start: s, end: e });
+  map.set(name, arr);
 }
 
-function push(out: OffsetRange[], start: number, end: number): void {
-  if (start < end) out.push({ start, end });
-}
-
 // ---------------------------------------------------------------------------
-// Declaration + arrow extraction per language
-// Returns: the offset ranges to highlight AND the set of declared names
+// Declaration extraction — returns Map<funcName, OR[]>
 // ---------------------------------------------------------------------------
 
-function extractJsTs(text: string, keywords: Set<string>): { ranges: OffsetRange[]; names: Set<string> } {
-  const ranges: OffsetRange[] = [];
-  const names = new Set<string>();
+function extractJsTs(text: string, keywords: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
   let m: RegExpExecArray | null;
 
-  // Named functions (including async, generator)
-  // Handles optional generics <T> before params
+  // Named functions (including async / generator)
   const namedFn = /\b((?:async\s+)?function\s*\*?\s*)(\w[\w$]*)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
   while ((m = namedFn.exec(text)) !== null) {
     const name = m[2];
     if (keywords.has(name)) continue;
-    names.add(name);
-    push(ranges, m.index, m.index + m[0].length);
+    add(out, name, m.index, m.index + m[0].length);
   }
 
-  // Class / object methods: [modifiers] name<generics>(params) [: ReturnType] {
-  // Leading whitespace is captured in group 1 so we can skip it.
-  const methodPat = /^(\s*)((?:(?:async|static|get|set|public|private|protected|override|abstract|readonly)\s+)*)([a-zA-Z_$][\w$]*)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s*:\s*(?:[\w<>\[\]|& ,.?!*]+))?(?=\s*[{;])/gm;
-  while ((m = methodPat.exec(text)) !== null) {
+  // Class / object methods
+  const method = /^(\s*)((?:(?:async|static|get|set|public|private|protected|override|abstract|readonly)\s+)*)([a-zA-Z_$][\w$]*)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s*:\s*(?:[\w<>\[\]|& ,.?!*]+))?(?=\s*[{;])/gm;
+  while ((m = method.exec(text)) !== null) {
     const name = m[3];
     if (keywords.has(name)) continue;
-    names.add(name);
-    const leadingWS = m[1].length;
-    push(ranges, m.index + leadingWS, m.index + m[0].length);
+    add(out, name, m.index + m[1].length, m.index + m[0].length);
   }
 
-  // Arrow functions: const/let/var name = [async] (params) =>
-  const arrowPat = /\b(const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=\s*(async\s+)?(?:\([^)]*(?:\([^)]*\)[^)]*)*\)|[\w$]+)\s*(=>)/g;
-  while ((m = arrowPat.exec(text)) !== null) {
+  // Arrow functions — highlight variable name AND the => token
+  const arrow = /\b(const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=\s*(async\s+)?(?:\([^)]*(?:\([^)]*\)[^)]*)*\)|[\w$]+)\s*(=>)/g;
+  while ((m = arrow.exec(text)) !== null) {
     const name = m[2];
     if (keywords.has(name)) continue;
-    names.add(name);
-
-    // Highlight just the variable name
-    const kw = m[1]; // "const" | "let" | "var"
-    const nameOffset = m[0].indexOf(name, kw.length);
-    push(ranges, m.index + nameOffset, m.index + nameOffset + name.length);
-
-    // Highlight the arrow token =>
-    const arrowOffset = m[0].lastIndexOf('=>');
-    push(ranges, m.index + arrowOffset, m.index + arrowOffset + 2);
+    const nameOff = m[0].indexOf(name, m[1].length);
+    add(out, name, m.index + nameOff, m.index + nameOff + name.length);
+    const arrowOff = m[0].lastIndexOf('=>');
+    add(out, name, m.index + arrowOff, m.index + arrowOff + 2);
   }
 
-  return { ranges, names };
+  return out;
 }
 
-function extractPython(text: string, keywords: Set<string>): { ranges: OffsetRange[]; names: Set<string> } {
-  const ranges: OffsetRange[] = [];
-  const names = new Set<string>();
+function extractPython(text: string, keywords: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
+  const def = /\b((?:async\s+)?def\s+(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)(?:\s*->[^:]+)?)\s*:/g;
   let m: RegExpExecArray | null;
-
-  // def / async def — highlight from keyword through closing paren of params
-  const defPat = /\b((?:async\s+)?def\s+(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)(?:\s*->[^:]+)?)\s*:/g;
-  while ((m = defPat.exec(text)) !== null) {
+  while ((m = def.exec(text)) !== null) {
     const name = m[2];
     if (keywords.has(name)) continue;
-    names.add(name);
-    // m[1] is the full signature without the colon
-    push(ranges, m.index, m.index + m[1].length);
+    add(out, name, m.index, m.index + m[1].length);
   }
-
-  return { ranges, names };
+  return out;
 }
 
-function extractGo(text: string, keywords: Set<string>): { ranges: OffsetRange[]; names: Set<string> } {
-  const ranges: OffsetRange[] = [];
-  const names = new Set<string>();
+function extractGo(text: string, keywords: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
+  const fn = /\bfunc\s+(?:\([^)]*\)\s+)?(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)/g;
   let m: RegExpExecArray | null;
-
-  // func [receiver] name(params)
-  const funcPat = /\bfunc\s+(?:\([^)]*\)\s+)?(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)/g;
-  while ((m = funcPat.exec(text)) !== null) {
+  while ((m = fn.exec(text)) !== null) {
     const name = m[1];
     if (keywords.has(name)) continue;
-    names.add(name);
-    push(ranges, m.index, m.index + m[0].length);
+    add(out, name, m.index, m.index + m[0].length);
   }
-
-  return { ranges, names };
+  return out;
 }
 
-function extractJava(text: string, keywords: Set<string>): { ranges: OffsetRange[]; names: Set<string> } {
-  const ranges: OffsetRange[] = [];
-  const names = new Set<string>();
+function extractJava(text: string, keywords: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
+  const method = /^(\s*)((?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*)(?:[\w<>\[\],? ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+throws\s+[\w,\s]+)?(?=\s*\{)/gm;
   let m: RegExpExecArray | null;
-
-  // [modifiers] ReturnType name(params) [throws ...] {
-  // ReturnType matched loosely as "word tokens + spaces/generics/arrays before the name"
-  const methodPat = /^(\s*)((?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*)(?:[\w<>\[\],? ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+throws\s+[\w,\s]+)?(?=\s*\{)/gm;
-  while ((m = methodPat.exec(text)) !== null) {
+  while ((m = method.exec(text)) !== null) {
     const name = m[3];
     if (keywords.has(name)) continue;
-    names.add(name);
-    const ws = m[1].length;
-    push(ranges, m.index + ws, m.index + m[0].length);
+    add(out, name, m.index + m[1].length, m.index + m[0].length);
   }
-
-  return { ranges, names };
+  return out;
 }
 
-function extractC(text: string, keywords: Set<string>): { ranges: OffsetRange[]; names: Set<string> } {
-  const ranges: OffsetRange[] = [];
-  const names = new Set<string>();
+function extractC(text: string, keywords: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
+  const fn = /^(\s*)((?:(?:static|extern|inline|virtual|explicit|constexpr|override|const)\s+)*)(?:[\w:*& ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+const)?(?=\s*[{;])/gm;
   let m: RegExpExecArray | null;
-
-  // [modifiers] ReturnType[*] name(params) [const] { or ;
-  const funcPat = /^(\s*)((?:(?:static|extern|inline|virtual|explicit|constexpr|override|const)\s+)*)(?:[\w:*& ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+const)?(?=\s*[{;])/gm;
-  while ((m = funcPat.exec(text)) !== null) {
+  while ((m = fn.exec(text)) !== null) {
     const name = m[3];
     if (keywords.has(name)) continue;
-    names.add(name);
-    const ws = m[1].length;
-    push(ranges, m.index + ws, m.index + m[0].length);
+    add(out, name, m.index + m[1].length, m.index + m[0].length);
   }
-
-  return { ranges, names };
+  return out;
 }
 
-function extractDeclarations(text: string, lang: string): { ranges: OffsetRange[]; names: Set<string> } {
-  const kw = getKeywords(lang);
-  if (lang === 'python') return extractPython(text, kw);
-  if (lang === 'go') return extractGo(text, kw);
-  if (lang === 'java') return extractJava(text, kw);
-  if (lang === 'c' || lang === 'cpp') return extractC(text, kw);
-  return extractJsTs(text, kw);
+function extractDeclarations(text: string, lang: string): Map<string, OR[]> {
+  const k = kw(lang);
+  if (lang === 'python') return extractPython(text, k);
+  if (lang === 'go') return extractGo(text, k);
+  if (lang === 'java') return extractJava(text, k);
+  if (lang === 'c' || lang === 'cpp') return extractC(text, k);
+  return extractJsTs(text, k);
 }
 
 // ---------------------------------------------------------------------------
-// Call-site detection
+// Call extraction — only for names that were declared in this file
 // ---------------------------------------------------------------------------
 
-function extractCalls(text: string, declaredNames: Set<string>): OffsetRange[] {
-  const ranges: OffsetRange[] = [];
-  const callPat = /\b([a-zA-Z_$][\w$]*)\s*\(/g;
+function extractCalls(text: string, declared: Set<string>): Map<string, OR[]> {
+  const out = new Map<string, OR[]>();
+  const pat = /\b([a-zA-Z_$][\w$]*)\s*\(/g;
   let m: RegExpExecArray | null;
-  while ((m = callPat.exec(text)) !== null) {
+  while ((m = pat.exec(text)) !== null) {
     const name = m[1];
-    if (declaredNames.has(name)) {
-      push(ranges, m.index, m.index + name.length);
-    }
+    if (declared.has(name)) add(out, name, m.index, m.index + name.length);
   }
-  return ranges;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
-// Main highlight computation
+// Apply decorations to an editor
 // ---------------------------------------------------------------------------
-
-function computeRanges(document: vscode.TextDocument): vscode.Range[] {
-  if (!SUPPORTED_LANGUAGES.has(document.languageId)) return [];
-
-  const text = document.getText();
-  const { ranges: declRanges, names } = extractDeclarations(text, document.languageId);
-  const callRanges = extractCalls(text, names);
-
-  return [...declRanges, ...callRanges].map(
-    ({ start, end }) => new vscode.Range(document.positionAt(start), document.positionAt(end))
-  );
-}
 
 function applyDecorations(editor: vscode.TextEditor): void {
-  if (!activeDecorationType) return;
-  editor.setDecorations(activeDecorationType, computeRanges(editor.document));
+  const lang = editor.document.languageId;
+
+  if (!SUPPORTED_LANGUAGES.has(lang)) {
+    for (const dt of decorationTypes) editor.setDecorations(dt, []);
+    return;
+  }
+
+  const text = editor.document.getText();
+  const declMap = extractDeclarations(text, lang);
+  const callMap = extractCalls(text, new Set(declMap.keys()));
+
+  // Sort ranges into per-color buckets
+  const buckets: vscode.Range[][] = PALETTE.map(() => []);
+
+  function flush(map: Map<string, OR[]>) {
+    for (const [name, offsets] of map) {
+      const ci = nameToColorIdx(name);
+      for (const { start, end } of offsets) {
+        buckets[ci].push(
+          new vscode.Range(editor.document.positionAt(start), editor.document.positionAt(end))
+        );
+      }
+    }
+  }
+
+  flush(declMap);
+  flush(callMap);
+
+  for (let i = 0; i < decorationTypes.length; i++) {
+    editor.setDecorations(decorationTypes[i], buckets[i]);
+  }
 }
 
-function applyDebounced(editor: vscode.TextEditor, delayMs = 250): void {
+// ---------------------------------------------------------------------------
+// Debounce helper
+// ---------------------------------------------------------------------------
+
+const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
+
+function applyDebounced(editor: vscode.TextEditor, ms = 250): void {
   const key = editor.document.uri.toString();
-  const existing = debounceMap.get(key);
-  if (existing !== undefined) clearTimeout(existing);
+  const t = debounceMap.get(key);
+  if (t !== undefined) clearTimeout(t);
   debounceMap.set(key, setTimeout(() => {
     debounceMap.delete(key);
     applyDecorations(editor);
-  }, delayMs));
+  }, ms));
 }
 
 function applyToAllVisible(): void {
@@ -289,41 +293,24 @@ function applyToAllVisible(): void {
 // ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext): void {
-  let currentColor = getConfigColor();
-  activeDecorationType = makeDecorationType(currentColor);
-
+  decorationTypes = makeDecorationTypes();
   applyToAllVisible();
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(editor => {
       if (editor) applyDecorations(editor);
     }),
-
     vscode.window.onDidChangeVisibleTextEditors(editors => {
-      for (const editor of editors) applyDecorations(editor);
+      for (const e of editors) applyDecorations(e);
     }),
-
     vscode.workspace.onDidChangeTextDocument(event => {
-      const editor = vscode.window.visibleTextEditors.find(
-        e => e.document === event.document
-      );
+      const editor = vscode.window.visibleTextEditors.find(e => e.document === event.document);
       if (editor) applyDebounced(editor);
-    }),
-
-    vscode.workspace.onDidChangeConfiguration(event => {
-      if (!event.affectsConfiguration('tetris.highlightColor')) return;
-      const newColor = getConfigColor();
-      if (newColor === currentColor) return;
-      currentColor = newColor;
-      activeDecorationType?.dispose();
-      activeDecorationType = makeDecorationType(currentColor);
-      applyToAllVisible();
     }),
   );
 }
 
 export function deactivate(): void {
-  activeDecorationType?.dispose();
+  for (const dt of decorationTypes) dt.dispose();
   for (const t of debounceMap.values()) clearTimeout(t);
-  debounceMap.clear();
 }

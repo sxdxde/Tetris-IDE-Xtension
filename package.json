@@ -11,32 +11,7 @@
   "keywords": ["highlight", "functions", "color", "tetris"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension",
-  "contributes": {
-    "configuration": {
-      "title": "Tetris",
-      "properties": {
-        "tetris.highlightColor": {
-          "type": "string",
-          "default": "#00FFCC",
-          "pattern": "^#[0-9a-fA-F]{6}$",
-          "patternErrorMessage": "Must be a 6-digit hex color (e.g. #00FFCC)",
-          "description": "Hex color for function declaration and call highlights."
-        }
-      }
-    },
-    "colors": [
-      {
-        "id": "tetris.functionHighlight",
-        "description": "Color used to highlight function declarations and calls",
-        "defaults": {
-          "dark": "#00FFCC",
-          "light": "#007A60",
-          "highContrast": "#00FFCC",
-          "highContrastLight": "#007A60"
-        }
-      }
-    ]
-  },
+  "contributes": {},
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
