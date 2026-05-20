@@ -65,6 +65,7 @@ function makeCD(color) {
 }
 // Per-document active decoration types (keyed by document URI string)
 const docDecs = new Map();
+const docCache = new Map();
 // ─── Brace / body matching ────────────────────────────────────────────────────
 // Finds the position after the closing '}' that matches the '{' at openAt.
 function braceEnd(text, openAt) {
@@ -394,6 +395,8 @@ function applyTo(editor) {
         }
     }
     docDecs.set(uri, newDecs);
+    // Update navigation cache
+    docCache.set(uri, { funcs, calls });
 }
 // ─── Debounce ─────────────────────────────────────────────────────────────────
 const debMap = new Map();
@@ -408,6 +411,72 @@ function applyAll() {
     for (const e of vscode.window.visibleTextEditors)
         applyTo(e);
 }
+// ─── Navigation commands ──────────────────────────────────────────────────────
+async function cmdGoToCallers() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor)
+        return;
+    const uri = editor.document.uri.toString();
+    const cache = docCache.get(uri);
+    if (!cache) {
+        vscode.window.showInformationMessage('Tetris: no function data for this file yet.');
+        return;
+    }
+    const offset = editor.document.offsetAt(editor.selection.active);
+    // Find the innermost declaration whose body contains the cursor.
+    // "Innermost" = largest bS that is still ≤ offset (handles nested functions).
+    const func = cache.funcs
+        .filter(f => offset >= f.bS && offset <= f.bE)
+        .sort((a, b) => b.bS - a.bS)[0];
+    if (!func) {
+        vscode.window.showInformationMessage('Tetris: place cursor inside a function declaration.');
+        return;
+    }
+    // Exclude call sites that sit within the function's own declaration body
+    // (e.g. the recursive call or the name in the signature itself).
+    const allCalls = cache.calls.get(func.name) ?? [];
+    const externalCalls = allCalls.filter(or => !(or.s >= func.bS && or.e <= func.bE));
+    if (externalCalls.length === 0) {
+        vscode.window.showInformationMessage(`Tetris: no callers of '${func.name}' found in this file.`);
+        return;
+    }
+    const locations = externalCalls.map(or => new vscode.Location(editor.document.uri, new vscode.Range(editor.document.positionAt(or.s), editor.document.positionAt(or.e))));
+    await vscode.commands.executeCommand('editor.action.goToLocations', editor.document.uri, editor.selection.active, locations, externalCalls.length === 1 ? 'goto' : 'peek', `No callers of '${func.name}' found`);
+}
+async function cmdGoToDeclaration() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor)
+        return;
+    const uri = editor.document.uri.toString();
+    const cache = docCache.get(uri);
+    if (!cache) {
+        vscode.window.showInformationMessage('Tetris: no function data for this file yet.');
+        return;
+    }
+    const offset = editor.document.offsetAt(editor.selection.active);
+    // Find which call site the cursor is on
+    let funcName;
+    outer: for (const [name, ors] of cache.calls) {
+        for (const or of ors) {
+            if (offset >= or.s && offset <= or.e) {
+                funcName = name;
+                break outer;
+            }
+        }
+    }
+    if (!funcName) {
+        vscode.window.showInformationMessage('Tetris: place cursor on a function call.');
+        return;
+    }
+    // Find declaration — if multiple (overloads), show all
+    const decls = cache.funcs.filter(f => f.name === funcName);
+    if (decls.length === 0) {
+        vscode.window.showInformationMessage(`Tetris: declaration of '${funcName}' not found in this file.`);
+        return;
+    }
+    const locations = decls.map(f => new vscode.Location(editor.document.uri, new vscode.Range(editor.document.positionAt(f.bS), editor.document.positionAt(f.bE))));
+    await vscode.commands.executeCommand('editor.action.goToLocations', editor.document.uri, editor.selection.active, locations, decls.length === 1 ? 'goto' : 'peek', `Declaration of '${funcName}' not found`);
+}
 // ─── Activation ───────────────────────────────────────────────────────────────
 function activate(ctx) {
     applyAll();
@@ -417,7 +486,7 @@ function activate(ctx) {
         const e = vscode.window.visibleTextEditors.find(x => x.document === ev.document);
         if (e)
             applyDebounced(e);
-    }));
+    }), vscode.commands.registerCommand('tetris.goToCallers', cmdGoToCallers), vscode.commands.registerCommand('tetris.goToDeclaration', cmdGoToDeclaration));
 }
 function deactivate() {
     for (const decs of docDecs.values()) {

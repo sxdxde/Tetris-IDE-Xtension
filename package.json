@@ -11,7 +11,34 @@
   "keywords": ["highlight", "functions", "color", "tetris"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension",
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "tetris.goToCallers",
+        "title": "Go to Callers",
+        "category": "Tetris"
+      },
+      {
+        "command": "tetris.goToDeclaration",
+        "title": "Go to Declaration",
+        "category": "Tetris"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tetris.goToCallers",
+          "when": "editorTextFocus",
+          "group": "tetris@1"
+        },
+        {
+          "command": "tetris.goToDeclaration",
+          "when": "editorTextFocus",
+          "group": "tetris@2"
+        }
+      ]
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
