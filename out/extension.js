@@ -9,6 +9,7 @@ const SUPPORTED = new Set([
     'python', 'java', 'c', 'cpp', 'go',
     'csharp', 'rust', 'php', 'swift', 'kotlin', 'ruby',
 ]);
+const LANG_GLOB = '**/*.{js,ts,jsx,tsx,py,java,c,cpp,h,hpp,go,cs,rs,php,swift,kt,rb}';
 // ─── Keyword blocklists ───────────────────────────────────────────────────────
 const JS_KW = new Set(['if', 'else', 'for', 'while', 'do', 'switch', 'try', 'catch', 'finally', 'return', 'new', 'delete', 'typeof', 'instanceof', 'in', 'of', 'class', 'extends', 'import', 'export', 'from', 'default', 'async', 'await', 'yield', 'function', 'var', 'let', 'const', 'this', 'super', 'null', 'undefined', 'true', 'false', 'void', 'throw', 'case', 'break', 'continue', 'debugger', 'static', 'public', 'private', 'protected', 'get', 'set', 'abstract', 'override', 'readonly', 'interface', 'type', 'enum', 'namespace', 'module', 'declare', 'as', 'is', 'satisfies']);
 const PY_KW = new Set(['if', 'elif', 'else', 'for', 'while', 'with', 'try', 'except', 'finally', 'return', 'yield', 'raise', 'pass', 'break', 'continue', 'import', 'from', 'as', 'class', 'lambda', 'and', 'or', 'not', 'in', 'is', 'None', 'True', 'False', 'global', 'nonlocal', 'del', 'assert', 'print']);
@@ -45,8 +46,6 @@ function kwFor(lang) {
     return JS_KW;
 }
 // ─── Color generation ─────────────────────────────────────────────────────────
-// Produces N maximally-distinct colors via evenly-spaced HSL hues.
-// No two entries are ever the same as long as N ≤ 360.
 function hslToHex(h, s, l) {
     s /= 100;
     l /= 100;
@@ -58,15 +57,27 @@ function hslToHex(h, s, l) {
     };
     return `#${f(0)}${f(8)}${f(4)}`;
 }
+function slotToColor(slot) {
+    return hslToHex(Math.round((slot * 137.508) % 360), 95, 60);
+}
 function hexToRgba(hex, alpha) {
     const h = hex.replace('#', '');
     return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${alpha})`;
 }
-function makePalette(n) {
-    if (n === 0)
-        return [];
-    // Golden-angle distribution gives better perceptual spread than uniform spacing
-    return Array.from({ length: n }, (_, i) => hslToHex(Math.round((i * 137.508) % 360), 95, 60));
+let extCtx;
+function colorKey(uri) { return `tetris.cm.${uri}`; }
+function resolveColors(uri, names) {
+    const stored = extCtx.workspaceState.get(colorKey(uri), { map: {}, next: 0 });
+    let changed = false;
+    for (const name of names) {
+        if (!(name in stored.map)) {
+            stored.map[name] = stored.next++;
+            changed = true;
+        }
+    }
+    if (changed)
+        extCtx.workspaceState.update(colorKey(uri), stored);
+    return names.map(n => slotToColor(stored.map[n]));
 }
 function makeCD(color) {
     return {
@@ -82,22 +93,26 @@ function makeCD(color) {
         }),
     };
 }
-// Per-document active decoration types (keyed by document URI string)
+// Single shared dim decoration — applied to all non-function-body ranges
+let dimDecType;
+function makeDimDecType() {
+    return vscode.window.createTextEditorDecorationType({
+        opacity: '0.35',
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    });
+}
 const docDecs = new Map();
 const docCache = new Map();
 // ─── Brace / body matching ────────────────────────────────────────────────────
-// Finds the position after the closing '}' that matches the '{' at openAt.
 function braceEnd(text, openAt) {
     let i = openAt + 1, depth = 1;
     while (i < text.length && depth > 0) {
         const c = text[i];
-        // Line comment
         if (c === '/' && text[i + 1] === '/') {
             while (i < text.length && text[i] !== '\n')
                 i++;
             continue;
         }
-        // Block comment
         if (c === '/' && text[i + 1] === '*') {
             i += 2;
             while (i + 1 < text.length && !(text[i] === '*' && text[i + 1] === '/'))
@@ -105,7 +120,6 @@ function braceEnd(text, openAt) {
             i += 2;
             continue;
         }
-        // String literals
         if (c === '"' || c === "'") {
             const q = c;
             i++;
@@ -117,7 +131,6 @@ function braceEnd(text, openAt) {
             i++;
             continue;
         }
-        // Template literals
         if (c === '`') {
             i++;
             while (i < text.length && text[i] !== '`') {
@@ -155,7 +168,6 @@ function braceEnd(text, openAt) {
     }
     return depth === 0 ? i : null;
 }
-// Scans forward from `from` to find the next '{', stopping at ';'.
 function nextBrace(text, from) {
     for (let i = from; i < text.length; i++) {
         if (text[i] === '{')
@@ -165,9 +177,7 @@ function nextBrace(text, from) {
     }
     return null;
 }
-// For Python: finds the end offset of the indented body after `colonAt`.
 function pyBodyEnd(text, colonAt) {
-    // Determine indentation of the `def` line
     let ls = colonAt;
     while (ls > 0 && text[ls - 1] !== '\n')
         ls--;
@@ -177,12 +187,12 @@ function pyBodyEnd(text, colonAt) {
     let i = colonAt + 1, last = colonAt;
     while (i < text.length) {
         while (i < text.length && text[i] !== '\n')
-            i++; // advance to EOL
+            i++;
         if (i >= text.length) {
             last = text.length;
             break;
         }
-        i++; // consume \n
+        i++;
         const lStart = i;
         let ind = 0;
         while (i < text.length && (text[i] === ' ' || text[i] === '\t')) {
@@ -194,31 +204,26 @@ function pyBodyEnd(text, colonAt) {
             break;
         }
         if (text[i] === '\n')
-            continue; // blank line — keep going
+            continue;
         if (ind <= defInd) {
             last = lStart > 0 ? lStart - 1 : 0;
             break;
-        } // body ended
+        }
         while (i < text.length && text[i] !== '\n') {
             last = i + 1;
             i++;
-        } // include line
+        }
     }
     return last;
 }
-// For Ruby: finds position after the `end` that closes the `def` starting at `from`.
-// Counts def/class/module/begin/case/if/unless/while/until/for/do as openers.
-// Skips strings and line comments.
 function rubyBodyEnd(text, from) {
     let i = from, depth = 1;
     while (i < text.length && depth > 0) {
-        // Line comment
         if (text[i] === '#') {
             while (i < text.length && text[i] !== '\n')
                 i++;
             continue;
         }
-        // Single-quoted string
         if (text[i] === "'") {
             i++;
             while (i < text.length && text[i] !== "'") {
@@ -229,7 +234,6 @@ function rubyBodyEnd(text, from) {
             i++;
             continue;
         }
-        // Double-quoted string (skip interpolation for simplicity)
         if (text[i] === '"') {
             i++;
             while (i < text.length && text[i] !== '"') {
@@ -240,14 +244,12 @@ function rubyBodyEnd(text, from) {
             i++;
             continue;
         }
-        // Word boundary — check for keywords
         if (/[a-zA-Z_]/.test(text[i])) {
             let j = i;
             while (j < text.length && /\w/.test(text[j]))
                 j++;
             const prev = i > 0 ? text[i - 1] : ' ';
             const word = text.slice(i, j);
-            // Only count as a keyword if not preceded by a word character (e.g. not inside `end_pos`)
             if (!/\w/.test(prev)) {
                 if (word === 'end') {
                     depth--;
@@ -258,13 +260,11 @@ function rubyBodyEnd(text, from) {
                     i = j;
                     continue;
                 }
-                // Block openers that always need an `end`
                 if (['def', 'class', 'module', 'begin', 'case'].includes(word)) {
                     depth++;
                     i = j;
                     continue;
                 }
-                // Conditional/loop openers — only when at line start (not postfix modifiers)
                 if (['if', 'unless', 'while', 'until', 'for'].includes(word)) {
                     let ls = i - 1;
                     while (ls >= 0 && text[ls] !== '\n') {
@@ -274,13 +274,11 @@ function rubyBodyEnd(text, from) {
                         }
                         ls--;
                     }
-                    if (ls >= 0 || i === 0) {
+                    if (ls >= 0 || i === 0)
                         depth++;
-                    }
                     i = j;
                     continue;
                 }
-                // `do` used as a block opener (e.g. `each do |x|`)
                 if (word === 'do') {
                     depth++;
                     i = j;
@@ -294,7 +292,7 @@ function rubyBodyEnd(text, from) {
     }
     return i;
 }
-// ─── Shared brace-based extractor helper ─────────────────────────────────────
+// ─── Shared brace extractor ───────────────────────────────────────────────────
 function braceExtract(text, re, nameGroup, wsGroup, kw) {
     const out = [];
     let m;
@@ -315,15 +313,11 @@ function extractFuncs(text, lang) {
     const kw = kwFor(lang);
     const out = [];
     let m;
-    // ── C# ───────────────────────────────────────────────────────────────────────
     if (lang === 'csharp') {
-        // [modifiers] ReturnType Name<T>(params) [where T : ...] { ... }
         const re = /^(\s*)((?:(?:public|private|protected|internal|static|abstract|virtual|override|sealed|async|new|extern|partial|readonly|unsafe|explicit|implicit)\s+)*)(?:[\w<>\[\],?.* ]+\s+)(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+where\s+[^{]+)?(?=\s*[{;])/gm;
         return braceExtract(text, re, 3, 1, kw);
     }
-    // ── Rust ─────────────────────────────────────────────────────────────────────
     if (lang === 'rust') {
-        // [pub[(crate)]] [async] [unsafe] fn name<T>(params) [-> ReturnType] [where ...]
         const re = /\b((?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+)(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
         while ((m = re.exec(text)) !== null) {
             const name = m[2];
@@ -336,9 +330,7 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── PHP ──────────────────────────────────────────────────────────────────────
     if (lang === 'php') {
-        // [modifiers] function name(params) [: ReturnType] { ... }
         const re = /\b((?:(?:public|private|protected|static|abstract|final)\s+)*)function\s+(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s*:\s*[\w\\|?! ]+)?/g;
         while ((m = re.exec(text)) !== null) {
             const name = m[2];
@@ -351,9 +343,7 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Swift ────────────────────────────────────────────────────────────────────
     if (lang === 'swift') {
-        // [modifiers] func name<T>(params) [async] [throws] [-> ReturnType] { ... }
         const re = /\b((?:(?:private|public|internal|fileprivate|open|static|class|override|mutating|nonmutating|final|required|convenience|dynamic|lazy|optional|nonisolated|isolated)\s+)*)func\s+(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
         while ((m = re.exec(text)) !== null) {
             const name = m[2];
@@ -366,16 +356,13 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Kotlin ───────────────────────────────────────────────────────────────────
     if (lang === 'kotlin') {
-        // [modifiers] fun name<T>(params) [: ReturnType] { ... }  OR  = expression
         const re = /\b((?:(?:private|public|internal|protected|override|abstract|open|final|suspend|inline|infix|operator|external|tailrec|actual|expect)\s+)*)fun\s+(\w+)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
         while ((m = re.exec(text)) !== null) {
             const name = m[2];
             if (kw.has(name))
                 continue;
             const sigS = m.index, sigE = m.index + m[0].length;
-            // Scan past optional `: ReturnType` to find `{` or `=`
             let k = sigE;
             while (k < text.length && text[k] !== '{' && text[k] !== '=' && text[k] !== '\n')
                 k++;
@@ -396,9 +383,7 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Ruby ─────────────────────────────────────────────────────────────────────
     if (lang === 'ruby') {
-        // def [self.]name[(params)]  …  end
         const re = /\b(def\s+(?:self\.)?(\w+)(?:\s*\([^)]*\))?)/g;
         while ((m = re.exec(text)) !== null) {
             const name = m[2];
@@ -410,7 +395,6 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Python ──────────────────────────────────────────────────────────────────
     if (lang === 'python') {
         const re = /\b((?:async\s+)?def\s+(\w+)\s*\([^)]*(?:\([^)]*\)[^)]*)*\)(?:\s*->[^:]+)?)\s*(:)/g;
         while ((m = re.exec(text)) !== null) {
@@ -424,7 +408,6 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Go ───────────────────────────────────────────────────────────────────────
     if (lang === 'go') {
         const re = /\bfunc\s+(?:\([^)]*\)\s+)?(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
         while ((m = re.exec(text)) !== null) {
@@ -438,7 +421,6 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── Java ─────────────────────────────────────────────────────────────────────
     if (lang === 'java') {
         const re = /^(\s*)((?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*)(?:[\w<>\[\],? ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+throws\s+[\w,\s]+)?(?=\s*\{)/gm;
         while ((m = re.exec(text)) !== null) {
@@ -452,7 +434,6 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── C / C++ ──────────────────────────────────────────────────────────────────
     if (lang === 'c' || lang === 'cpp') {
         const re = /^(\s*)((?:(?:static|extern|inline|virtual|explicit|constexpr|override|const)\s+)*)(?:[\w:*& ]+\s+)(\w+)\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s+const)?(?=\s*[{;])/gm;
         while ((m = re.exec(text)) !== null) {
@@ -466,8 +447,7 @@ function extractFuncs(text, lang) {
         }
         return out;
     }
-    // ── JavaScript / TypeScript ───────────────────────────────────────────────────
-    // Named functions: function [*] name<T>(params)
+    // JavaScript / TypeScript
     const namedFn = /\b((?:async\s+)?function\s*\*?\s*)(\w[\w$]*)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))/g;
     while ((m = namedFn.exec(text)) !== null) {
         const name = m[2];
@@ -478,7 +458,6 @@ function extractFuncs(text, lang) {
         const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
         out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
     }
-    // Class / object methods
     const method = /^(\s*)((?:(?:async|static|get|set|public|private|protected|override|abstract|readonly)\s+)*)([a-zA-Z_$][\w$]*)\s*(?:<[^>]*>)?\s*(\([^)]*(?:\([^)]*\)[^)]*)*\))(?:\s*:\s*[\w<>\[\]|& ,.?!*]+)?(?=\s*[{;])/gm;
     while ((m = method.exec(text)) !== null) {
         const name = m[3];
@@ -489,7 +468,6 @@ function extractFuncs(text, lang) {
         const bE = ob !== null ? (braceEnd(text, ob) ?? sigE) : sigE;
         out.push({ name, sig: [{ s: sigS, e: sigE }], bS: sigS, bE });
     }
-    // Arrow functions: const/let/var name = [async] <T>(params) =>
     const arrow = /\b(const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=\s*(async\s+)?(?:<[^>]*>)?\s*(?:\([^)]*(?:\([^)]*\)[^)]*)*\)|[\w$]+)\s*(=>)/g;
     while ((m = arrow.exec(text)) !== null) {
         const name = m[2];
@@ -501,7 +479,6 @@ function extractFuncs(text, lang) {
         const arrowOff = m[0].lastIndexOf('=>');
         const arrowS = m.index + arrowOff;
         const afterArrow = m.index + m[0].length;
-        // Find body end
         let k = afterArrow;
         while (k < text.length && (text[k] === ' ' || text[k] === '\t'))
             k++;
@@ -510,18 +487,12 @@ function extractFuncs(text, lang) {
             bE = braceEnd(text, k) ?? afterArrow;
         }
         else {
-            // Expression body — highlight to end of expression (next ; or \n)
             let end = k;
             while (end < text.length && text[end] !== '\n' && text[end] !== ';')
                 end++;
             bE = end;
         }
-        out.push({
-            name,
-            sig: [{ s: nameS, e: nameE }, { s: arrowS, e: arrowS + 2 }],
-            bS: nameS,
-            bE,
-        });
+        out.push({ name, sig: [{ s: nameS, e: nameE }, { s: arrowS, e: arrowS + 2 }], bS: nameS, bE });
     }
     return out;
 }
@@ -540,12 +511,46 @@ function extractCalls(text, names) {
     }
     return out;
 }
+// ─── Dim range computation ────────────────────────────────────────────────────
+// Returns ranges covering everything OUTSIDE function bodies.
+function computeDimRanges(doc, funcs) {
+    if (funcs.length === 0)
+        return [];
+    const textLen = doc.getText().length;
+    // Merge overlapping/adjacent body spans
+    const sorted = [...funcs].sort((a, b) => a.bS - b.bS);
+    const merged = [];
+    for (const f of sorted) {
+        if (merged.length === 0 || f.bS > merged[merged.length - 1].e) {
+            merged.push({ s: f.bS, e: f.bE });
+        }
+        else {
+            merged[merged.length - 1].e = Math.max(merged[merged.length - 1].e, f.bE);
+        }
+    }
+    // Complement: gaps between merged spans
+    const gaps = [];
+    let cur = 0;
+    for (const { s, e } of merged) {
+        if (cur < s)
+            gaps.push({ s: cur, e: s });
+        cur = e;
+    }
+    if (cur < textLen)
+        gaps.push({ s: cur, e: textLen });
+    return gaps.map(g => new vscode.Range(doc.positionAt(g.s), doc.positionAt(g.e)));
+}
+// ─── Offset → Position (without opening a TextDocument) ───────────────────────
+function offsetToPos(text, offset) {
+    const before = text.slice(0, Math.min(offset, text.length));
+    const lines = before.split('\n');
+    return new vscode.Position(lines.length - 1, lines[lines.length - 1].length);
+}
 // ─── Main apply logic ─────────────────────────────────────────────────────────
 function applyTo(editor) {
     const uri = editor.document.uri.toString();
     const lang = editor.document.languageId;
     const doc = editor.document;
-    // Clear and bail for unsupported languages
     if (!SUPPORTED.has(lang)) {
         const old = docDecs.get(uri);
         if (old) {
@@ -555,11 +560,11 @@ function applyTo(editor) {
             }
             docDecs.delete(uri);
         }
+        editor.setDecorations(dimDecType, []);
         return;
     }
     const text = doc.getText();
     const funcs = extractFuncs(text, lang);
-    // Collect unique names in order of first appearance (top → bottom)
     const seen = new Set();
     const order = [];
     for (const f of funcs) {
@@ -577,14 +582,15 @@ function applyTo(editor) {
             }
             docDecs.delete(uri);
         }
+        editor.setDecorations(dimDecType, []);
         return;
     }
-    const palette = makePalette(order.length); // N distinct colors
+    // Resolve persistent colors — same name always gets the same color
+    const colors = resolveColors(uri, order);
     const nameIdx = new Map(order.map((n, i) => [n, i]));
-    const newDecs = palette.map(makeCD);
+    const newDecs = colors.map(makeCD);
     const bgBuckets = newDecs.map(() => []);
     const fgBuckets = newDecs.map(() => []);
-    // Function bodies → bg; signature ranges → fg
     for (const f of funcs) {
         const ci = nameIdx.get(f.name);
         bgBuckets[ci].push(new vscode.Range(doc.positionAt(f.bS), doc.positionAt(f.bE)));
@@ -592,7 +598,6 @@ function applyTo(editor) {
             fgBuckets[ci].push(new vscode.Range(doc.positionAt(r.s), doc.positionAt(r.e)));
         }
     }
-    // Call sites → fg
     const calls = extractCalls(text, new Set(order));
     for (const [name, ors] of calls) {
         const ci = nameIdx.get(name);
@@ -600,7 +605,7 @@ function applyTo(editor) {
             fgBuckets[ci].push(new vscode.Range(doc.positionAt(r.s), doc.positionAt(r.e)));
         }
     }
-    // Apply new decorations first, then dispose old ones (prevents flicker)
+    // Apply function decorations first, dispose old ones after (prevents flicker)
     for (let i = 0; i < newDecs.length; i++) {
         editor.setDecorations(newDecs[i].bg, bgBuckets[i]);
         editor.setDecorations(newDecs[i].fg, fgBuckets[i]);
@@ -613,6 +618,8 @@ function applyTo(editor) {
         }
     }
     docDecs.set(uri, newDecs);
+    // Dim everything outside function bodies
+    editor.setDecorations(dimDecType, computeDimRanges(doc, funcs));
     // Update navigation cache
     docCache.set(uri, { funcs, calls });
 }
@@ -629,6 +636,28 @@ function applyAll() {
     for (const e of vscode.window.visibleTextEditors)
         applyTo(e);
 }
+// ─── Cross-file caller search ─────────────────────────────────────────────────
+async function findCallersAcrossWorkspace(funcName, currentUri, token) {
+    const locations = [];
+    const files = await vscode.workspace.findFiles(LANG_GLOB, '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.next/**,**/out/**}');
+    for (const fileUri of files) {
+        if (token.isCancellationRequested)
+            break;
+        if (fileUri.toString() === currentUri)
+            continue;
+        try {
+            const bytes = await vscode.workspace.fs.readFile(fileUri);
+            const text = new TextDecoder().decode(bytes);
+            const calls = extractCalls(text, new Set([funcName]));
+            const ors = calls.get(funcName) ?? [];
+            for (const or of ors) {
+                locations.push(new vscode.Location(fileUri, new vscode.Range(offsetToPos(text, or.s), offsetToPos(text, or.e))));
+            }
+        }
+        catch { /* skip unreadable files */ }
+    }
+    return locations;
+}
 // ─── Navigation commands ──────────────────────────────────────────────────────
 async function cmdGoToCallers() {
     const editor = vscode.window.activeTextEditor;
@@ -641,8 +670,6 @@ async function cmdGoToCallers() {
         return;
     }
     const offset = editor.document.offsetAt(editor.selection.active);
-    // Find the innermost declaration whose body contains the cursor.
-    // "Innermost" = largest bS that is still ≤ offset (handles nested functions).
     const func = cache.funcs
         .filter(f => offset >= f.bS && offset <= f.bE)
         .sort((a, b) => b.bS - a.bS)[0];
@@ -650,16 +677,22 @@ async function cmdGoToCallers() {
         vscode.window.showInformationMessage('Tetris: place cursor inside a function declaration.');
         return;
     }
-    // Exclude call sites that sit within the function's own declaration body
-    // (e.g. the recursive call or the name in the signature itself).
+    // Call sites outside the function's own body
     const allCalls = cache.calls.get(func.name) ?? [];
-    const externalCalls = allCalls.filter(or => !(or.s >= func.bS && or.e <= func.bE));
-    if (externalCalls.length === 0) {
-        vscode.window.showInformationMessage(`Tetris: no callers of '${func.name}' found in this file.`);
+    const localCallers = allCalls.filter(or => !(or.s >= func.bS && or.e <= func.bE));
+    const localLocations = localCallers.map(or => new vscode.Location(editor.document.uri, new vscode.Range(editor.document.positionAt(or.s), editor.document.positionAt(or.e))));
+    if (localLocations.length > 0) {
+        await vscode.commands.executeCommand('editor.action.goToLocations', editor.document.uri, editor.selection.active, localLocations, localLocations.length === 1 ? 'goto' : 'peek', `No callers of '${func.name}' found`);
         return;
     }
-    const locations = externalCalls.map(or => new vscode.Location(editor.document.uri, new vscode.Range(editor.document.positionAt(or.s), editor.document.positionAt(or.e))));
-    await vscode.commands.executeCommand('editor.action.goToLocations', editor.document.uri, editor.selection.active, locations, externalCalls.length === 1 ? 'goto' : 'peek', `No callers of '${func.name}' found`);
+    // No local callers — search the whole workspace
+    let workspaceLocations = [];
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Tetris: searching workspace for callers of '${func.name}'...`, cancellable: true }, async (_, token) => { workspaceLocations = await findCallersAcrossWorkspace(func.name, uri, token); });
+    if (workspaceLocations.length === 0) {
+        vscode.window.showInformationMessage(`Tetris: no callers of '${func.name}' found anywhere in the workspace.`);
+        return;
+    }
+    await vscode.commands.executeCommand('editor.action.goToLocations', editor.document.uri, editor.selection.active, workspaceLocations, workspaceLocations.length === 1 ? 'goto' : 'peek', `No callers of '${func.name}' found`);
 }
 async function cmdGoToDeclaration() {
     const editor = vscode.window.activeTextEditor;
@@ -672,7 +705,6 @@ async function cmdGoToDeclaration() {
         return;
     }
     const offset = editor.document.offsetAt(editor.selection.active);
-    // Find which call site the cursor is on
     let funcName;
     outer: for (const [name, ors] of cache.calls) {
         for (const or of ors) {
@@ -686,7 +718,6 @@ async function cmdGoToDeclaration() {
         vscode.window.showInformationMessage('Tetris: place cursor on a function call.');
         return;
     }
-    // Find declaration — if multiple (overloads), show all
     const decls = cache.funcs.filter(f => f.name === funcName);
     if (decls.length === 0) {
         vscode.window.showInformationMessage(`Tetris: declaration of '${funcName}' not found in this file.`);
@@ -697,8 +728,10 @@ async function cmdGoToDeclaration() {
 }
 // ─── Activation ───────────────────────────────────────────────────────────────
 function activate(ctx) {
+    extCtx = ctx;
+    dimDecType = makeDimDecType();
     applyAll();
-    ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => { if (e)
+    ctx.subscriptions.push({ dispose: () => dimDecType.dispose() }, vscode.window.onDidChangeActiveTextEditor(e => { if (e)
         applyTo(e); }), vscode.window.onDidChangeVisibleTextEditors(es => { for (const e of es)
         applyTo(e); }), vscode.workspace.onDidChangeTextDocument(ev => {
         const e = vscode.window.visibleTextEditors.find(x => x.document === ev.document);
